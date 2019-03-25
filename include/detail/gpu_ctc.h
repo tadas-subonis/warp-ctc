@@ -11,10 +11,13 @@ class GpuCTC {
                int minibatch,
                void *workspace,
                CUstream stream,
-               int blank_label) :
+               int blank_label,
+			   ProbT smp_alpha = 0.5,
+			   ProbT smp_gamma = 0) :
             out_dim_(alphabet_size), minibatch_(minibatch),
             gpu_workspace_(workspace), stream_(stream),
-            blank_label_(blank_label) {};
+            blank_label_(blank_label),
+			smp_alpha_(smp_alpha), smp_gamma_(smp_gamma) {};
 
         // Noncopyable
         GpuCTC(const GpuCTC&) = delete;
@@ -23,6 +26,7 @@ class GpuCTC {
         ctcStatus_t
         cost_and_grad(const ProbT* const activations,
                       ProbT* grads,
+	                  ProbT* grad_weights,
                       ProbT* costs,
                       const int* const flat_labels,
                       const int* const label_lengths,
@@ -40,12 +44,14 @@ class GpuCTC {
         template<int NT, int VT>
         ctcStatus_t launch_alpha_beta_kernels(const ProbT* const probs,
                                               ProbT *grads,
+	                                          ProbT* grad_weights,
                                               bool compute_alpha,
                                               bool compute_beta);
 
         ctcStatus_t
         launch_gpu_kernels(const ProbT* const probs,
                            ProbT *grads,
+		                   ProbT* grad_weights,
                            size_t config,
                            bool launch_alpha,
                            bool launch_beta);
@@ -67,6 +73,7 @@ class GpuCTC {
         ctcStatus_t
         compute_cost_and_score(const ProbT* const activations,
                                ProbT* grads,
+	                           ProbT* grad_weights,
                                ProbT* costs,
                                const int* const flat_labels,
                                const int* const label_lengths,
@@ -98,6 +105,9 @@ class GpuCTC {
         ProbT *nll_backward_;
         ProbT *denoms_; // Temporary storage for denoms for softmax
         ProbT *probs_; // Temporary storage for probabilities (softmax output)
+
+		ProbT smp_alpha_; // Reweight non-blank and blank samples
+		ProbT smp_gamma_; // Hyper-parameter for CTFL
 };
 
 template<typename ProbT>
@@ -258,7 +268,7 @@ GpuCTC<ProbT>::setup_gpu_metadata(const int* const flat_labels,
 template<typename ProbT>
 template<int NT, int VT>
 ctcStatus_t GpuCTC<ProbT>::launch_alpha_beta_kernels(const ProbT* const probs,
-                                                     ProbT* grads,
+                                                     ProbT* grads, ProbT* grad_weights,
                                                      bool compute_alpha,
                                                      bool compute_beta ) {
 
@@ -281,7 +291,8 @@ ctcStatus_t GpuCTC<ProbT>::launch_alpha_beta_kernels(const ProbT* const probs,
         compute_betas_and_grad_kernel<ProbT, NT, VT><<<grid_size, NT, 0, stream_>>>
             (probs, label_sizes_, utt_length_, repeats_,
              labels_with_blanks_, alphas_, nll_forward_, nll_backward_,
-             grads, stride, out_dim_, S_, T_, blank_label_);
+             grads, stride, out_dim_, S_, T_, blank_label_,
+			 smp_alpha_, smp_gamma_, grad_weights);
 
         cudaStreamSynchronize(stream_);
     }
@@ -331,23 +342,24 @@ template<typename ProbT>
 ctcStatus_t
 GpuCTC<ProbT>::launch_gpu_kernels(const ProbT* const probs,
                                   ProbT* grads,
+	                              ProbT* grad_weights,
                                   size_t config,
                                   bool l_a,
                                   bool l_b) {
 
     switch(config) {
-        case 0:   {return launch_alpha_beta_kernels<32,   1>(probs, grads, l_a, l_b);}
-        case 1:   {return launch_alpha_beta_kernels<64,   1>(probs, grads, l_a, l_b);}
-        case 2:   {return launch_alpha_beta_kernels<128,  1>(probs, grads, l_a, l_b);}
-        case 3:   {return launch_alpha_beta_kernels<64,   3>(probs, grads, l_a, l_b);}
-        case 4:   {return launch_alpha_beta_kernels<128,  2>(probs, grads, l_a, l_b);}
-        case 5:   {return launch_alpha_beta_kernels<32,   9>(probs, grads, l_a, l_b);}
-        case 6:   {return launch_alpha_beta_kernels<64,   6>(probs, grads, l_a, l_b);}
-        case 7:   {return launch_alpha_beta_kernels<128,  4>(probs, grads, l_a, l_b);}
-        case 8:   {return launch_alpha_beta_kernels<64,   9>(probs, grads, l_a, l_b);}
-        case 9:   {return launch_alpha_beta_kernels<128,  6>(probs, grads, l_a, l_b);}
-        case 10:  {return launch_alpha_beta_kernels<128,  9>(probs, grads, l_a, l_b);}
-        case 11:  {return launch_alpha_beta_kernels<128, 10>(probs, grads, l_a, l_b);}
+        case 0:   {return launch_alpha_beta_kernels<32,   1>(probs, grads, grad_weights, l_a, l_b);}
+        case 1:   {return launch_alpha_beta_kernels<64,   1>(probs, grads, grad_weights, l_a, l_b);}
+        case 2:   {return launch_alpha_beta_kernels<128,  1>(probs, grads, grad_weights, l_a, l_b);}
+        case 3:   {return launch_alpha_beta_kernels<64,   3>(probs, grads, grad_weights, l_a, l_b);}
+        case 4:   {return launch_alpha_beta_kernels<128,  2>(probs, grads, grad_weights, l_a, l_b);}
+        case 5:   {return launch_alpha_beta_kernels<32,   9>(probs, grads, grad_weights, l_a, l_b);}
+        case 6:   {return launch_alpha_beta_kernels<64,   6>(probs, grads, grad_weights, l_a, l_b);}
+        case 7:   {return launch_alpha_beta_kernels<128,  4>(probs, grads, grad_weights, l_a, l_b);}
+        case 8:   {return launch_alpha_beta_kernels<64,   9>(probs, grads, grad_weights, l_a, l_b);}
+        case 9:   {return launch_alpha_beta_kernels<128,  6>(probs, grads, grad_weights, l_a, l_b);}
+        case 10:  {return launch_alpha_beta_kernels<128,  9>(probs, grads, grad_weights, l_a, l_b);}
+        case 11:  {return launch_alpha_beta_kernels<128, 10>(probs, grads, grad_weights, l_a, l_b);}
     }
 
     return CTC_STATUS_EXECUTION_FAILED;
@@ -402,6 +414,7 @@ template<typename ProbT>
 ctcStatus_t
 GpuCTC<ProbT>::compute_cost_and_score(const ProbT* const activations,
                                       ProbT* grads,
+	                                  ProbT* grad_weights,
                                       ProbT* costs,
                                       const int* const flat_labels,
                                       const int* const label_lengths,
@@ -421,7 +434,7 @@ GpuCTC<ProbT>::compute_cost_and_score(const ProbT* const activations,
     if (status != CTC_STATUS_SUCCESS)
         return status;
 
-    launch_gpu_kernels(probs_, grads, best_config,
+    launch_gpu_kernels(probs_, grads, grad_weights, best_config,
                        compute_alpha, compute_betas_and_grad);
 
     cudaError_t cuda_status_mem, cuda_status_sync;
@@ -438,7 +451,8 @@ GpuCTC<ProbT>::compute_cost_and_score(const ProbT* const activations,
 template<typename ProbT>
 ctcStatus_t
 GpuCTC<ProbT>::cost_and_grad(const ProbT* const activations,
-                             ProbT* grads,
+                             ProbT* grads, 
+	                         ProbT* grad_weights,
                              ProbT* costs,
                              const int* const flat_labels,
                              const int* const label_lengths,
@@ -452,7 +466,7 @@ GpuCTC<ProbT>::cost_and_grad(const ProbT* const activations,
         )
         return CTC_STATUS_INVALID_VALUE;
 
-    return compute_cost_and_score(activations, grads, costs, flat_labels,
+    return compute_cost_and_score(activations, grads, grad_weights, costs, flat_labels,
                                   label_lengths, input_lengths, true, true);
 }
 
@@ -471,7 +485,7 @@ GpuCTC<ProbT>::score_forward(const ProbT* const activations,
         )
         return CTC_STATUS_INVALID_VALUE;
 
-    return compute_cost_and_score(activations, nullptr, costs, flat_labels,
+    return compute_cost_and_score(activations, nullptr, nullptr, costs, flat_labels,
                                   label_lengths, input_lengths, true, false);
 }
 

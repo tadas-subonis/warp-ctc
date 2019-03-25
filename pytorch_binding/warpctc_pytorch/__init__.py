@@ -15,11 +15,12 @@ def _assert_no_grad(tensor):
 class _CTC(Function):
     @staticmethod
     def forward(ctx, acts, labels, act_lens, label_lens, size_average=False,
-                length_average=False, blank=0):
+                length_average=False, blank=0, alpha=0.5, gamma=0):
         is_cuda = True if acts.is_cuda else False
         acts = acts.contiguous()
         loss_func = warp_ctc.gpu_ctc if is_cuda else warp_ctc.cpu_ctc
         grads = torch.zeros(acts.size()).type_as(acts)
+        grad_weights = torch.zeros(acts.shape[0], acts.shape[1]).type_as(acts)
         minibatch_size = acts.size(1)
         costs = torch.zeros(minibatch_size).cpu()
         loss_func(acts,
@@ -29,9 +30,13 @@ class _CTC(Function):
                   act_lens,
                   minibatch_size,
                   costs,
-                  blank)
-
-        costs = torch.FloatTensor([costs.sum()])
+                  blank,
+                  alpha,
+                  gamma,
+                  grad_weights)
+        
+        costs = torch.FloatTensor([costs.sum()]) / minibatch_size
+        grads = grads / torch.mean(grad_weights).item()
 
         if length_average:
             # Compute the avg. log-probability per batch sample and frame.
@@ -48,7 +53,7 @@ class _CTC(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return ctx.grads, None, None, None, None, None, None
+        return ctx.grads, None, None, None, None, None, None, None, None
 
 
 class CTCLoss(Module):
@@ -60,12 +65,14 @@ class CTCLoss(Module):
             in the batch. If `True`, supersedes `size_average`
             (default: `False`)
     """
-    def __init__(self, blank=0, size_average=False, length_average=False):
+    def __init__(self, alpha=0.5, gamma=0, blank=0, size_average=False, length_average=False):
         super(CTCLoss, self).__init__()
         self.ctc = _CTC.apply
         self.blank = blank
         self.size_average = size_average
         self.length_average = length_average
+        self.alpha=alpha
+        self.gamma=gamma
 
     def forward(self, acts, labels, act_lens, label_lens):
         """
@@ -79,4 +86,4 @@ class CTCLoss(Module):
         _assert_no_grad(act_lens)
         _assert_no_grad(label_lens)
         return self.ctc(acts, labels, act_lens, label_lens, self.size_average,
-                        self.length_average, self.blank)
+                        self.length_average, self.blank, self.alpha, self.gamma)

@@ -222,7 +222,8 @@ void compute_betas_and_grad_kernel (const ProbT* probs, const int *label_sizes,
                                     const int *labels_with_blanks, ProbT *alphas,
                                     const ProbT* nll_forward, ProbT *nll_backward,
                                     ProbT *grads, int stride, int out_dim,
-                                    int S_memoffset, int T_memoffset, int blank_label) {
+                                    int S_memoffset, int T_memoffset, int blank_label,
+									ProbT smp_alpha, ProbT smp_gamma, ProbT *grad_weights) {
 
     ctc_helper::log_plus<ProbT> log_plus_f;
     typedef CTASegReduce<NT, VT, ProbT, int, ctc_helper::log_plus<ProbT>> SegReduce;
@@ -255,6 +256,9 @@ void compute_betas_and_grad_kernel (const ProbT* probs, const int *label_sizes,
     __shared__ int keys_shared[NV];
     __shared__ int gather_indices[NV];
     __shared__ ProbT output[NV];
+	// Temporaries needed for sample weights
+	__shared__ ProbT smp_cache[NT];
+	__shared__ ProbT smp_weight;
 
     ProbT beta_val[VT];
 
@@ -428,6 +432,52 @@ void compute_betas_and_grad_kernel (const ProbT* probs, const int *label_sizes,
             }
 
             __syncthreads();
+
+			// Calculate the weight for each t in each sequence
+			if (tid == 0) {
+				smp_weight = 1;
+			}
+			__syncthreads();
+			if (smp_gamma != 0 || smp_alpha != 0.5) {
+				if (smp_gamma != 0) {
+					smp_cache[tid] = 0;
+					for (int idx = tid; idx < out_dim; idx += blockDim.x) {
+						const int grads_offset = prob_offset + start_prob_col + idx;
+						smp_cache[tid] += std::pow(std::abs(grads[grads_offset]), smp_gamma);
+					}
+					__syncthreads();
+					// NT must be an integer power of 2
+					for (int idx = NT / 2; idx != 0; idx = idx / 2) {
+						if (tid < idx) {
+							smp_cache[tid] += smp_cache[tid + idx];
+						}
+						__syncthreads();
+					}
+					if (tid == 0) {
+						smp_weight *= smp_cache[0];
+					}
+					__syncthreads();
+				}
+				if (smp_alpha != 0.5) {
+					if (tid == 0) {
+						const int blank_offset = prob_offset + start_prob_col + blank_label;
+						const ProbT blank_prob = probs[blank_offset] - grads[blank_offset];
+						smp_weight *= smp_alpha * (1 - blank_prob) + (1 - smp_alpha) * blank_prob;
+					}
+					__syncthreads();
+				}
+				for (int idx = tid; idx < out_dim; idx += blockDim.x) {
+					const int grads_offset = prob_offset + start_prob_col + idx;
+					grads[grads_offset] *= smp_weight;
+				}
+				__syncthreads();
+			}
+			// Used to normalize the gradients
+			if (tid == 0) {
+				if (grad_weights)
+					grad_weights[blockIdx.x + t * stride] = smp_weight;
+			}
+			__syncthreads();
         }
 
         // Output backward log likelihood

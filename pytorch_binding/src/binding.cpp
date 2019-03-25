@@ -23,7 +23,9 @@ int cpu_ctc(torch::Tensor probs,
             torch::Tensor sizes,
             int minibatch_size,
             torch::Tensor costs,
-            int blank_label)
+            int blank_label,
+	        float smp_alpha = 0.5,
+	        float smp_gamma = 0)
 {
     float* probs_ptr       = (float*)probs.data_ptr();
     float* grads_ptr       = grads.storage() ? (float*)grads.data_ptr() : NULL;
@@ -39,6 +41,8 @@ int cpu_ctc(torch::Tensor probs,
     options.loc = CTC_CPU;
     options.num_threads = 0; // will use default number of threads
     options.blank_label = blank_label;
+	options.smp_alpha = smp_alpha;
+	options.smp_gamma = smp_gamma;
 
 #if defined(CTC_DISABLE_OMP) || defined(APPLE)
     // have to use at least one
@@ -70,7 +74,10 @@ int gpu_ctc(torch::Tensor probs,
             torch::Tensor sizes,
             int minibatch_size,
             torch::Tensor costs,
-            int blank_label)
+            int blank_label,
+	        float smp_alpha,
+	        float smp_gamma,
+            torch::Tensor grad_weights)
 {
     float* probs_ptr       = (float*)probs.data_ptr();
     float* grads_ptr       = grads.storage() ? (float*)grads.data_ptr() : NULL;
@@ -78,6 +85,7 @@ int gpu_ctc(torch::Tensor probs,
     int*   labels_ptr      = (int*)labels.data_ptr();
     int*   label_sizes_ptr = (int*)label_sizes.data_ptr();
     float* costs_ptr       = (float*)costs.data_ptr();
+    float* grad_weights_ptr = (float*)grad_weights.data_ptr();
 
     const int probs_size = probs.size(2);
 
@@ -86,6 +94,8 @@ int gpu_ctc(torch::Tensor probs,
     options.loc = CTC_GPU;
     options.blank_label = blank_label;
     options.stream = at::cuda::getCurrentCUDAStream();
+	options.smp_alpha = smp_alpha;
+	options.smp_gamma = smp_gamma;
 
     size_t gpu_size_bytes;
     get_workspace_size(label_sizes_ptr, sizes_ptr,
@@ -98,7 +108,8 @@ int gpu_ctc(torch::Tensor probs,
                      labels_ptr, label_sizes_ptr,
                      sizes_ptr, probs_size,
                      minibatch_size, costs_ptr,
-                     gpu_workspace, options);
+                     gpu_workspace, options,
+		             grad_weights_ptr);
 
     THCudaFree(state, (void *) gpu_workspace);
     return 1;

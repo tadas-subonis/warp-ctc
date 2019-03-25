@@ -45,7 +45,8 @@ ctcStatus_t compute_ctc_loss(const float* const activations,
                              int minibatch,
                              float *costs,
                              void *workspace,
-                             ctcOptions options) {
+                             ctcOptions options,
+	                         float *grad_weights) {
 
     if (activations == nullptr ||
         flat_labels == nullptr ||
@@ -72,10 +73,10 @@ ctcStatus_t compute_ctc_loss(const float* const activations,
     } else if (options.loc == CTC_GPU) {
 #ifdef __CUDACC__
         GpuCTC<float> ctc(alphabet_size, minibatch, workspace, options.stream,
-                          options.blank_label);
+                          options.blank_label, options.smp_alpha, options.smp_gamma);
 
         if (gradients != NULL)
-            return ctc.cost_and_grad(activations, gradients, costs,
+            return ctc.cost_and_grad(activations, gradients, grad_weights, costs,
                                      flat_labels, label_lengths,
                                      input_lengths);
         else

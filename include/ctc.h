@@ -53,6 +53,9 @@ struct ctcOptions {
 
     /// the label value/index that the CTC calculation should use as the blank label
     int blank_label;
+	/// the weighting parameters
+	float smp_alpha = 0.5;
+	float smp_gamma = 0;
 };
 
 /** Compute the connectionist temporal classification loss between a sequence
@@ -100,7 +103,8 @@ __declspec(dllexport) ctcStatus_t compute_ctc_loss(const float* const activation
                              int minibatch,
                              float *costs,
                              void *workspace,
-                             ctcOptions options);
+                             ctcOptions options,
+	                         float *grad_weights = nullptr);
 
 
 /** For a given set of labels and minibatch size return the required workspace
