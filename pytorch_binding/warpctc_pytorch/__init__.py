@@ -20,7 +20,7 @@ class _CTC(Function):
         acts = acts.contiguous()
         loss_func = warp_ctc.gpu_ctc if is_cuda else warp_ctc.cpu_ctc
         grads = torch.zeros(acts.size()).type_as(acts)
-        grad_weights = torch.zeros(acts.shape[0], acts.shape[1]).type_as(acts)
+        grad_weights = torch.ones(acts.size()).type_as(acts)
         minibatch_size = acts.size(1)
         costs = torch.zeros(minibatch_size).cpu()
         loss_func(acts,
@@ -36,7 +36,9 @@ class _CTC(Function):
                   grad_weights)
         
         costs = torch.FloatTensor([costs.sum()]) / minibatch_size
-        grads = grads / torch.mean(grad_weights).item()
+        if alpha != 0.5 or gamma != 0:
+            grads = grads * torch.sum(torch.abs(grad_weights)).item() / torch.sum(torch.abs(grads)).item()
+        grads = grads / (acts.size(0) * minibatch_size)
 
         if length_average:
             # Compute the avg. log-probability per batch sample and frame.

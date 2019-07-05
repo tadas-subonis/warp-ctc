@@ -468,15 +468,17 @@ void compute_betas_and_grad_kernel (const ProbT* probs, const int *label_sizes,
 				}
 				for (int idx = tid; idx < out_dim; idx += blockDim.x) {
 					const int grads_offset = prob_offset + start_prob_col + idx;
+					if (grad_weights)
+						grad_weights[grads_offset] = grads[grads_offset];
 					grads[grads_offset] *= smp_weight;
 				}
 				__syncthreads();
 			}
-			// Used to normalize the gradients
-			if (tid == 0) {
-				if (grad_weights)
-					grad_weights[blockIdx.x + t * stride] = smp_weight;
-			}
+			//// Used to normalize the gradients
+			//if (tid == 0) {
+			//	if (grad_weights)
+			//		grad_weights[blockIdx.x + t * stride] = smp_weight;
+			//}
 			__syncthreads();
         }
 
