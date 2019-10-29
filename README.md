@@ -22,7 +22,13 @@ cmake -G "Visual Studio 15 2017 Win64" ..
 ```
 If using vs2015 instead of vs2017 for building, replace the `cmake -G "Visual Studio 15 2017 Win64" ..` with `cmake -G "Visual Studio 14 2015 Win64" ..`.
 
-Open the `warp-ctc/build/ctc_release.sln` with vs2017, and build the project `ALL_BUILD` (Release x64). Then install the bindings:
+Build with the following command (MSBuild has to be on a path. Likely location is ```C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\MSBuild\15.0\Bin```):
+```
+cd warp-ctc\build\
+msbuild ctc_release.sln /p:Configuration=Release /p:Platform="x64"
+```
+
+Then install the bindings:
 ```cmd
 cd ../pytorch_binding
 python setup.py install
